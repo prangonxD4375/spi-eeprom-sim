@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPI EEPROM Simulator — 25LC256</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+  :root {
+    --green: #00ff88;
+    --green-dim: #00aa55;
+    --green-faint: #004422;
+    --green-glow: rgba(0,255,136,0.15);
+    --amber: #ffaa00;
+    --red: #ff4444;
+    --blue: #44aaff;
+    --purple: #aa88ff;
+    --bg: #070d08;
+    --bg2: #0a1510;
+    --bg3: #0d1e12;
+    --border: #1a3322;
+    --text: #b0ffcc;
+    --text-dim: #4a8860;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 4px);
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* CRT vignette */
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.6) 100%);
+    pointer-events: none;
+    z-index: 9998;
+  }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--bg2);
+    position: relative;
+  }
+
+  header::after {
+    content: '';
+    position: absolute;
+    bottom: -1px; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--green-dim), transparent);
+  }
+
+  .logo {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 900;
+    font-size: 18px;
+    color: var(--green);
+    text-shadow: 0 0 20px var(--green), 0 0 40px rgba(0,255,136,0.3);
+    letter-spacing: 3px;
+  }
+
+  .logo span { color: var(--green-dim); font-weight: 400; font-size: 12px; letter-spacing: 2px; }
+
+  .status-pill {
+    margin-left: auto;
+    display: flex; gap: 12px; align-items: center;
+  }
+
+  .pill {
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+  }
+
+  .pill.active { border-color: var(--green-dim); color: var(--green); }
+
+  .led {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: blink 2s ease-in-out infinite;
+  }
+
+  @keyframes blink {
+    0%,100% { opacity:1; } 50% { opacity:0.3; }
+  }
+
+  .main-grid {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 0;
+    height: calc(100vh - 57px);
+  }
+
+  /* Panel base */
+  .panel {
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel-header {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--green-dim);
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+
+  .panel-header .dot {
+    width: 5px; height: 5px;
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+  }
+
+  /* ===== LEFT PANEL ===== */
+  .left-panel {
+    grid-row: 1 / 3;
+    overflow-y: auto;
+  }
+
+  /* Command input */
+  .cmd-section { padding: 14px; border-bottom: 1px solid var(--border); }
+
+  .cmd-label { font-size: 10px; color: var(--text-dim); letter-spacing: 1px; margin-bottom: 8px; }
+
+  .cmd-row { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+
+  .cmd-btn {
+    padding: 5px 10px;
+    border: 1px solid var(--green-dim);
+    background: transparent;
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 1px;
+  }
+
+  .cmd-btn:hover {
+    background: var(--green-glow);
+    box-shadow: 0 0 10px rgba(0,255,136,0.2);
+  }
+
+  .cmd-btn.active {
+    background: var(--green);
+    color: #000;
+    box-shadow: 0 0 15px rgba(0,255,136,0.4);
+  }
+
+  .input-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+
+  .input-row { display: flex; align-items: center; gap: 8px; }
+
+  .input-row label { font-size: 10px; color: var(--text-dim); width: 70px; flex-shrink: 0; }
+
+  .hex-input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px;
+    padding: 4px 8px;
+    width: 100%;
+    outline: none;
+    letter-spacing: 2px;
+    transition: border-color 0.2s;
+  }
+
+  .hex-input:focus { border-color: var(--green-dim); box-shadow: 0 0 8px var(--green-glow); }
+
+  .exec-btn {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--green);
+    background: transparent;
+    color: var(--green);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 4px;
+  }
+
+  .exec-btn:hover {
+    background: var(--green);
+    color: #000;
+    box-shadow: 0 0 20px rgba(0,255,136,0.4);
+  }
+
+  /* Status Register */
+  .sr-section { padding: 14px; border-bottom: 1px solid var(--border); }
+
+  .sr-title { font-size: 10px; color: var(--text-dim); letter-spacing: 1px; margin-bottom: 10px; }
+
+  .sr-bits {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+
+  .sr-bit {
+    flex: 1;
+    text-align: center;
+  }
+
+  .sr-bit-val {
+    width: 100%;
+    aspect-ratio: 1;
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.15s;
+    background: var(--bg);
+  }
+
+  .sr-bit-val.on {
+    background: var(--green-faint);
+    border-color: var(--green-dim);
+    color: var(--green);
+    box-shadow: 0 0 8px var(--green-glow);
+  }
+
+  .sr-bit-val.off { color: var(--text-dim); }
+
+  .sr-bit-name { font-size: 9px; color: var(--text-dim); letter-spacing: 0.5px; margin-top: 3px; }
+
+  .sr-byte {
+    font-size: 11px;
+    color: var(--amber);
+    letter-spacing: 2px;
+    text-align: center;
+    padding: 4px;
+    border: 1px solid #443300;
+    background: #1a1000;
+  }
+
+  /* Transaction log */
+  .log-section { padding: 10px 14px; flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+  .log-title { font-size: 10px; color: var(--text-dim); letter-spacing: 1px; margin-bottom: 8px; flex-shrink: 0; }
+
+  .log-entries {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 3px;
+  }
+
+  .log-entry {
+    padding: 4px 8px;
+    border-left: 2px solid var(--border);
+    font-size: 11px;
+    color: var(--text-dim);
+    animation: logIn 0.2s ease;
+  }
+
+  @keyframes logIn { from { opacity:0; transform: translateX(-4px); } to { opacity:1; transform: none; } }
+
+  .log-entry.write { border-left-color: var(--amber); }
+  .log-entry.read { border-left-color: var(--blue); }
+  .log-entry.ctrl { border-left-color: var(--green-dim); }
+  .log-entry .op { color: var(--green); font-weight: bold; }
+  .log-entry .addr { color: var(--amber); }
+  .log-entry .data { color: var(--blue); }
+  .log-entry .ts { color: var(--text-dim); font-size: 9px; float: right; }
+
+  /* ===== WAVEFORM PANEL ===== */
+  .wave-panel {
+    border-right: none;
+    height: 220px;
+  }
+
+  .wave-canvas-wrap {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    background: #050a06;
+  }
+
+  canvas#waveCanvas {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* ===== HEX EDITOR PANEL ===== */
+  .hex-panel {
+    border-right: none;
+    overflow: hidden;
+  }
+
+  .hex-toolbar {
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .hex-search {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    padding: 3px 8px;
+    outline: none;
+    width: 120px;
+  }
+
+  .hex-search:focus { border-color: var(--green-dim); }
+
+  .hex-info { margin-left: auto; font-size: 10px; color: var(--text-dim); }
+
+  .hex-grid-wrap { flex: 1; overflow-y: auto; padding: 8px; }
+
+  .hex-grid {
+    display: grid;
+    grid-template-columns: 60px repeat(16, 24px) 16px 16ch;
+    gap: 1px 2px;
+    min-width: 600px;
+  }
+
+  .hex-grid-header {
+    display: contents;
+  }
+
+  .hex-grid-header > div {
+    font-size: 9px;
+    color: var(--text-dim);
+    text-align: center;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 1px;
+  }
+
+  .hex-grid-header > .addr-hdr { text-align: left; }
+
+  .hex-row { display: contents; }
+
+  .hex-addr {
+    font-size: 11px;
+    color: var(--green-dim);
+    padding: 2px 0;
+    letter-spacing: 1px;
+  }
+
+  .hex-cell {
+    font-size: 11px;
+    text-align: center;
+    padding: 2px 1px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    color: var(--text-dim);
+    transition: all 0.1s;
+    border-radius: 1px;
+  }
+
+  .hex-cell:hover {
+    border-color: var(--green-dim);
+    color: var(--green);
+    background: var(--green-glow);
+  }
+
+  .hex-cell.nonzero { color: var(--text); }
+  .hex-cell.selected { background: var(--green-faint); border-color: var(--green); color: var(--green); }
+  .hex-cell.recently-written {
+    animation: flash 1s ease;
+  }
+
+  @keyframes flash {
+    0% { background: var(--green); color: #000; }
+    100% { background: transparent; }
+  }
+
+  .hex-spacer { border-left: 1px solid var(--border); }
+
+  .ascii-cell {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+  }
+
+  .ascii-cell.nonzero { color: var(--green-dim); }
+
+  /* Edit modal */
+  .edit-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+    display: none;
+  }
+
+  .edit-overlay.open { display: flex; }
+
+  .edit-box {
+    background: var(--bg2);
+    border: 1px solid var(--green);
+    box-shadow: 0 0 40px rgba(0,255,136,0.2);
+    padding: 20px;
+    min-width: 260px;
+  }
+
+  .edit-box h3 {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px;
+    color: var(--green);
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+  }
+
+  .edit-box .hex-input { width: 100%; margin-bottom: 10px; font-size: 18px; text-align: center; }
+
+  .edit-btns { display: flex; gap: 8px; }
+  .edit-btns button { flex: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">SPI<span>◆</span>EEPROM <span>/ 25LC256 SIMULATOR v1.0</span></div>
+  <div class="status-pill">
+    <div class="pill active">MODE 0,0</div>
+    <div class="pill active">256 BYTES</div>
+    <div class="pill">3.3V</div>
+    <div class="led"></div>
+  </div>
+</header>
+
+<div class="main-grid">
+
+  <!-- LEFT: Command + Status + Log -->
+  <div class="panel left-panel">
+
+    <!-- Commands -->
+    <div class="cmd-section">
+      <div class="cmd-label">▸ INSTRUCTION SET</div>
+      <div class="cmd-row">
+        <button class="cmd-btn active" data-cmd="WREN" onclick="selectCmd('WREN',this)">WREN</button>
+        <button class="cmd-btn" data-cmd="WRDI" onclick="selectCmd('WRDI',this)">WRDI</button>
+        <button class="cmd-btn" data-cmd="RDSR" onclick="selectCmd('RDSR',this)">RDSR</button>
+        <button class="cmd-btn" data-cmd="WRITE" onclick="selectCmd('WRITE',this)">WRITE</button>
+        <button class="cmd-btn" data-cmd="READ" onclick="selectCmd('READ',this)">READ</button>
+      </div>
+      <div class="input-group" id="addr-group">
+        <div class="input-row">
+          <label>ADDR (hex)</label>
+          <input class="hex-input" id="addrInput" type="text" value="0000" maxlength="4" placeholder="0000" oninput="sanitizeHex(this,4)">
+        </div>
+      </div>
+      <div class="input-group" id="data-group">
+        <div class="input-row">
+          <label>DATA (hex)</label>
+          <input class="hex-input" id="dataInput" type="text" value="FF" maxlength="2" placeholder="FF" oninput="sanitizeHex(this,2)">
+        </div>
+      </div>
+      <button class="exec-btn" onclick="executeCmd()">▶ EXECUTE</button>
+    </div>
+
+    <!-- Status Register -->
+    <div class="sr-section">
+      <div class="sr-title">▸ STATUS REGISTER (SPSR)</div>
+      <div class="sr-bits" id="srBits"></div>
+      <div class="sr-byte" id="srByte">0x00</div>
+    </div>
+
+    <!-- Transaction Log -->
+    <div class="log-section">
+      <div class="log-title">▸ TRANSACTION LOG</div>
+      <div class="log-entries" id="logEntries"></div>
+    </div>
+  </div>
+
+  <!-- TOP RIGHT: Waveform -->
+  <div class="panel wave-panel">
+    <div class="panel-header"><div class="dot"></div> OSCILLOSCOPE — SPI BUS</div>
+    <div class="wave-canvas-wrap">
+      <canvas id="waveCanvas"></canvas>
+    </div>
+  </div>
+
+  <!-- BOTTOM RIGHT: Hex Editor -->
+  <div class="panel hex-panel">
+    <div class="panel-header"><div class="dot"></div> MEMORY EDITOR — 256 BYTES</div>
+    <div class="hex-toolbar">
+      <input class="hex-search" id="hexSearch" placeholder="Search value..." oninput="searchHex(this.value)">
+      <button class="cmd-btn" onclick="fillZero()">FILL 0x00</button>
+      <button class="cmd-btn" onclick="fillRandom()">FILL RANDOM</button>
+      <button class="cmd-btn" onclick="clearSearch()">CLEAR</button>
+      <div class="hex-info" id="hexInfo">256 bytes / 0 used</div>
+    </div>
+    <div class="hex-grid-wrap">
+      <div class="hex-grid" id="hexGrid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit modal -->
+<div class="edit-overlay" id="editOverlay">
+  <div class="edit-box">
+    <h3>EDIT MEMORY CELL</h3>
+    <div id="editAddrLabel" style="font-size:11px;color:var(--text-dim);margin-bottom:8px;"></div>
+    <input class="hex-input" id="editInput" type="text" maxlength="2" oninput="sanitizeHex(this,2)">
+    <div class="edit-btns">
+      <button class="cmd-btn" onclick="confirmEdit()">WRITE</button>
+      <button class="cmd-btn" onclick="closeEdit()">CANCEL</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────────────────────────────
+const MEM_SIZE = 256;
+const memory = new Uint8Array(MEM_SIZE);
+const statusReg = {
+  WIP: 0,   // bit 0: Write In Progress
+  WEL: 0,   // bit 1: Write Enable Latch
+  BP0: 0,   // bit 2: Block Protect 0
+  BP1: 0,   // bit 3: Block Protect 1
+  WPEN: 0,  // bit 7: Write Protect Enable
+};
+
+const SR_BITS = ['WIP','WEL','BP0','BP1','0','0','0','WPEN'];
+
+let currentCmd = 'WREN';
+let editingCell = -1;
+let waveData = [];  // [{label, bits[]}]
+let logCount = 0;
+let selectedCell = -1;
+let searchHighlights = new Set();
+
+// ─── COMMAND UI ──────────────────────────────────────────────────────────────
+function selectCmd(cmd, btn) {
+  currentCmd = cmd;
+  document.querySelectorAll('.cmd-btn[data-cmd]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const needsAddr = ['READ','WRITE'].includes(cmd);
+  const needsData = cmd === 'WRITE';
+  document.getElementById('addr-group').style.display = needsAddr ? '' : 'none';
+  document.getElementById('data-group').style.display = needsData ? '' : 'none';
+}
+
+function sanitizeHex(el, maxLen) {
+  el.value = el.value.replace(/[^0-9a-fA-F]/g,'').toUpperCase().slice(0, maxLen);
+}
+
+// ─── COMMAND EXECUTION ───────────────────────────────────────────────────────
+function executeCmd() {
+  const addr = parseInt(document.getElementById('addrInput').value || '0', 16);
+  const dataVal = parseInt(document.getElementById('dataInput').value || 'FF', 16);
+
+  switch(currentCmd) {
+    case 'WREN':  cmdWREN(); break;
+    case 'WRDI':  cmdWRDI(); break;
+    case 'RDSR':  cmdRDSR(); break;
+    case 'WRITE': cmdWRITE(addr, dataVal); break;
+    case 'READ':  cmdREAD(addr); break;
+  }
+  renderSR();
+}
+
+function cmdWREN() {
+  statusReg.WEL = 1;
+  addWave('WREN', buildWave(0x06, null, null, null));
+  addLog('ctrl', 'WREN', null, null, 'Write Enable SET');
+}
+
+function cmdWRDI() {
+  statusReg.WEL = 0;
+  addWave('WRDI', buildWave(0x04, null, null, null));
+  addLog('ctrl', 'WRDI', null, null, 'Write Disable');
+}
+
+function cmdRDSR() {
+  const sr = getSRByte();
+  // RDSR: send opcode 0x05, EEPROM responds with status byte on MISO in the next byte slot
+  addWave('RDSR', buildWave(0x05, null, null, sr));
+  addLog('read', 'RDSR', null, sr, `Status: 0x${sr.toString(16).padStart(2,'0').toUpperCase()}`);
+}
+
+function cmdWRITE(addr, data) {
+  if (!statusReg.WEL) {
+    addLog('ctrl', 'WRITE', addr, data, '⚠ WEL not set — ignored');
+    addWave('WRITE_ERR', buildWave(0x02, addr, data, null));
+    return;
+  }
+  if (addr >= MEM_SIZE) {
+    addLog('ctrl', 'WRITE', addr, data, '⚠ Address out of range');
+    return;
+  }
+  memory[addr] = data & 0xFF;
+  statusReg.WEL = 0;  // auto-clear after write
+  statusReg.WIP = 1;
+  setTimeout(() => { statusReg.WIP = 0; renderSR(); }, 800);
+  addWave('WRITE', buildWave(0x02, addr, data, null));
+  addLog('write', 'WRITE', addr, data, `MEM[0x${addr.toString(16).padStart(4,'0').toUpperCase()}] ← 0x${data.toString(16).padStart(2,'0').toUpperCase()}`);
+  flashCell(addr);
+  renderHex();
+}
+
+function cmdREAD(addr) {
+  if (addr >= MEM_SIZE) {
+    addLog('ctrl', 'READ', addr, null, '⚠ Address out of range');
+    return;
+  }
+  const val = memory[addr];
+  addWave('READ', buildWave(0x03, addr, null, val));
+  addLog('read', 'READ', addr, val, `MEM[0x${addr.toString(16).padStart(4,'0').toUpperCase()}] → 0x${val.toString(16).padStart(2,'0').toUpperCase()}`);
+  selectedCell = addr;
+  renderHex();
+}
+
+// ─── STATUS REGISTER ─────────────────────────────────────────────────────────
+function getSRByte() {
+  return (statusReg.WPEN << 7) |
+         (statusReg.BP1  << 3) |
+         (statusReg.BP0  << 2) |
+         (statusReg.WEL  << 1) |
+         (statusReg.WIP  << 0);
+}
+
+function renderSR() {
+  const bits = getSRByte();
+  const container = document.getElementById('srBits');
+  container.innerHTML = '';
+  SR_BITS.slice().reverse().forEach((name, i) => {
+    const bitIdx = 7 - i;
+    const on = (bits >> bitIdx) & 1;
+    const div = document.createElement('div');
+    div.className = 'sr-bit';
+    const clickable = ['WEL','BP0','BP1','WPEN'].includes(name);
+    div.innerHTML = `
+      <div class="sr-bit-val ${on?'on':'off'}" 
+           ${clickable ? `onclick="toggleSRBit('${name}')" title="Click to toggle ${name}"` : ''}>${on}</div>
+      <div class="sr-bit-name">${name}</div>`;
+    container.appendChild(div);
+  });
+  document.getElementById('srByte').textContent = `0x${bits.toString(16).padStart(2,'0').toUpperCase()}`;
+}
+
+function toggleSRBit(name) {
+  if (name === 'WEL' || name === 'WIP') return; // controlled by commands
+  statusReg[name] ^= 1;
+  renderSR();
+}
+
+// ─── WAVEFORM ─────────────────────────────────────────────────────────────────
+// Builds a proper SPI transaction where:
+//   mosiBytes = everything sent FROM the CPU  (opcode + addr + write-data)
+//   misoBytes = everything received FROM the EEPROM (zeros during command phase, data during response phase)
+//
+// Real SPI rule: MISO is valid only AFTER the EEPROM has processed the command.
+//   READ  (0x03): [opcode][addr_h][addr_l] → EEPROM clocks out [data] on MISO during 4th byte
+//   RDSR  (0x05): [opcode]                 → EEPROM clocks out [status] on MISO during 2nd byte
+//   WRITE (0x02): [opcode][addr_h][addr_l][data] → MISO stays 0x00 throughout (write-only)
+//   WREN  (0x06): [opcode]                 → MISO stays 0x00 (no response)
+function buildWave(opcode, addr, mosiData, misoData) {
+  // Build MOSI byte sequence
+  const mosiBytes = [opcode];
+  if (addr !== null) {
+    mosiBytes.push((addr >> 8) & 0xFF);  // address high byte
+    mosiBytes.push(addr & 0xFF);          // address low byte
+  }
+  if (mosiData !== null) mosiBytes.push(mosiData);  // data byte for WRITE
+
+  // Build MISO byte sequence — same length as MOSI, but EEPROM only drives
+  // MISO during the response phase. All earlier bytes are 0x00 (tri-state / idle).
+  const misoBytes = new Array(mosiBytes.length).fill(0x00);
+
+  if (misoData !== null) {
+    // For READ: response comes in a EXTRA byte AFTER opcode+addr are sent.
+    // The CPU sends a dummy 0xFF byte; EEPROM drives real data on MISO.
+    // We model this by appending an extra byte: MOSI=0xFF (dummy), MISO=actual data.
+    mosiBytes.push(0xFF);          // dummy byte CPU clocks out to receive data
+    misoBytes.push(misoData);      // EEPROM's actual response on MISO
+  }
+
+  return { bytes: mosiBytes, misoBytes };
+}
+
+const LINES = ['CS','CLK','MOSI','MISO'];
+const LINE_COLORS = { CS: '#ff4444', CLK: '#00ff88', MOSI: '#ffaa00', MISO: '#44aaff' };
+
+function renderWaveform(waveInfo) {
+  const canvas = document.getElementById('waveCanvas');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth * dpr;
+  const H = canvas.offsetHeight * dpr;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#050a06';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = '#0d1e12';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 20 * dpr) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += 20 * dpr) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  if (!waveInfo) {
+    ctx.fillStyle = '#1a3322';
+    ctx.font = `${12*dpr}px Share Tech Mono`;
+    ctx.textAlign = 'center';
+    ctx.fillText('NO TRANSACTION', W/2, H/2);
+    return;
+  }
+
+  const { bytes, misoBytes } = waveInfo;
+  // totalBits uses bytes.length which already includes the dummy READ byte from buildWave
+  const totalBits = bytes.length * 8;
+  const totalSamples = totalBits * 2 + 4; // each bit = 2 samples (CLK hi+lo), +2 pre-CS +2 post-CS
+  const laneH = (H * 0.78) / 4;
+  const laneGap = H * 0.22 / 5;
+  const labelW = 55 * dpr;
+  const bitW = (W - labelW - 8 * dpr) / totalSamples;
+
+  function laneY(i) { return laneGap + i * (laneH + laneGap); }
+  function hi(i) { return laneY(i); }
+  function lo(i) { return laneY(i) + laneH; }
+
+  function drawSignal(i, samples, color, label) {
+    const y = laneY(i);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2 * dpr;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6 * dpr;
+    ctx.beginPath();
+
+    let px = labelW;
+    let lastV = samples[0];
+    ctx.moveTo(px, lastV === 1 ? hi(i) : lo(i));
+
+    samples.forEach((v, si) => {
+      const nx = labelW + (si + 1) * bitW;
+      if (v !== lastV) {
+        ctx.lineTo(px, v === 1 ? hi(i) : lo(i));
+      }
+      ctx.lineTo(nx, v === 1 ? hi(i) : lo(i));
+      px = nx;
+      lastV = v;
+    });
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Label
+    ctx.fillStyle = color;
+    ctx.font = `bold ${9*dpr}px Share Tech Mono`;
+    ctx.textAlign = 'right';
+    ctx.fillText(label, labelW - 4*dpr, hi(i) + laneH/2 + 4*dpr);
+  }
+
+  // Build samples — each bit gets TWO slots: CLK high, then CLK low
+  const csS = [], clkS = [], mosiS = [], misoS = [];
+  // Pre-transaction: CS high → then CS falls (idle state)
+  csS.push(1); clkS.push(0); mosiS.push(0); misoS.push(0);
+  csS.push(0); clkS.push(0); mosiS.push(0); misoS.push(0); // CS asserts
+
+  bytes.forEach((byte, bi) => {
+    const misoByte = misoBytes[bi] ?? 0x00;
+    for (let bit = 7; bit >= 0; bit--) {
+      const mb = (byte >> bit) & 1;
+      const rb = (misoByte >> bit) & 1;
+      // CLK rising edge — data is valid here
+      csS.push(0); clkS.push(1); mosiS.push(mb); misoS.push(rb);
+      // CLK falling edge
+      csS.push(0); clkS.push(0); mosiS.push(mb); misoS.push(rb);
+    }
+  });
+
+  // CS deasserts after last bit
+  csS.push(1); clkS.push(0); mosiS.push(0); misoS.push(0);
+
+  drawSignal(0, csS,   LINE_COLORS.CS,   '~CS');
+  drawSignal(1, clkS,  LINE_COLORS.CLK,  'CLK');
+  drawSignal(2, mosiS, LINE_COLORS.MOSI, 'MOSI');
+  drawSignal(3, misoS, LINE_COLORS.MISO, 'MISO');
+
+  // Bit value labels above MOSI lane
+  ctx.font = `${8*dpr}px Share Tech Mono`;
+  ctx.textAlign = 'center';
+  bytes.forEach((byte, bi) => {
+    const misoByte = misoBytes[bi] ?? 0x00;
+    for (let bit = 7; bit >= 0; bit--) {
+      // +2 offset for pre-transaction idle samples, *2 for hi+lo slots, center on rising edge
+      const sampleIdx = 2 + bi * 16 + (7 - bit) * 2;
+      const cx = labelW + sampleIdx * bitW + bitW * 0.5;
+      // MOSI label
+      ctx.fillStyle = '#ffaa0088';
+      ctx.fillText(((byte >> bit) & 1).toString(), cx, hi(2) - 3*dpr);
+      // MISO label — only draw if non-zero byte to keep it clean
+      if (misoByte !== 0x00) {
+        ctx.fillStyle = '#44aaff88';
+        ctx.fillText(((misoByte >> bit) & 1).toString(), cx, lo(3) + 10*dpr);
+      }
+    }
+  });
+
+  // Byte boundary dividers
+  ctx.strokeStyle = '#ffffff14';
+  ctx.lineWidth = 1 * dpr;
+  ctx.setLineDash([4*dpr, 3*dpr]);
+  for (let bi = 0; bi <= bytes.length; bi++) {
+    const x = labelW + (2 + bi * 16) * bitW;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H * 0.92); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // Byte phase labels at bottom
+  // Determine transaction type from opcode
+  const opcode = bytes[0];
+  const isRead = (opcode === 0x03);
+  const isRDSR = (opcode === 0x05);
+  const isWrite = (opcode === 0x02);
+
+  const phaseLabels = bytes.map((_, bi) => {
+    if (bi === 0) return { label: `OPCODE 0x${bytes[0].toString(16).padStart(2,'0').toUpperCase()}`, miso: false };
+    if (isRead || isWrite) {
+      if (bi === 1) return { label: 'ADDR_HIGH', miso: false };
+      if (bi === 2) return { label: 'ADDR_LOW', miso: false };
+      if (bi === 3) return { label: isRead ? 'DUMMY (→ DATA on MISO)' : 'DATA_WRITE', miso: isRead };
+    }
+    if (isRDSR) {
+      if (bi === 1) return { label: 'STATUS (MISO)', miso: true };
+    }
+    return { label: `BYTE_${bi}`, miso: misoBytes[bi] !== 0 };
+  });
+
+  ctx.font = `bold ${9*dpr}px Share Tech Mono`;
+  ctx.textAlign = 'center';
+  phaseLabels.forEach(({ label, miso }, bi) => {
+    const cx = labelW + (2 + bi * 16 + 8) * bitW;
+    ctx.fillStyle = miso ? '#44aaff99' : '#00ff8866';
+    ctx.fillText(label, cx, H - 4*dpr);
+  });
+}
+
+// ─── LOG ──────────────────────────────────────────────────────────────────────
+function addLog(type, op, addr, data, msg) {
+  const container = document.getElementById('logEntries');
+  const div = document.createElement('div');
+  div.className = `log-entry ${type}`;
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  let addrStr = addr !== null ? `<span class="addr">[0x${addr.toString(16).padStart(4,'0').toUpperCase()}]</span> ` : '';
+  let dataStr = data !== null ? `<span class="data">0x${data.toString(16).padStart(2,'0').toUpperCase()}</span> ` : '';
+  div.innerHTML = `<span class="op">${op}</span> ${addrStr}${dataStr}<span style="color:var(--text-dim)"> ${msg}</span><span class="ts">${ts}</span>`;
+  container.prepend(div);
+  logCount++;
+  if (logCount > 100) container.lastElementChild?.remove();
+}
+
+function addWave(label, waveInfo) {
+  renderWaveform(waveInfo);
+}
+
+// ─── HEX EDITOR ──────────────────────────────────────────────────────────────
+function renderHex() {
+  const grid = document.getElementById('hexGrid');
+  grid.innerHTML = '';
+
+  // Header row
+  const hdr = document.createElement('div');
+  hdr.className = 'hex-grid-header';
+  hdr.innerHTML = `<div class="addr-hdr">ADDR</div>${Array.from({length:16},(_,i)=>`<div>+${i.toString(16).toUpperCase()}</div>`).join('')}<div></div><div style="text-align:left">ASCII</div>`;
+  grid.appendChild(hdr);
+
+  let usedCount = 0;
+  for (let row = 0; row < 16; row++) {
+    const addrDiv = document.createElement('div');
+    addrDiv.className = 'hex-addr';
+    addrDiv.textContent = `0x${(row*16).toString(16).padStart(4,'0').toUpperCase()}`;
+    grid.appendChild(addrDiv);
+
+    let ascii = '';
+    for (let col = 0; col < 16; col++) {
+      const idx = row * 16 + col;
+      const val = memory[idx];
+      if (val !== 0) usedCount++;
+      const cell = document.createElement('div');
+      cell.className = 'hex-cell' +
+        (val !== 0 ? ' nonzero' : '') +
+        (idx === selectedCell ? ' selected' : '') +
+        (searchHighlights.has(idx) ? ' selected' : '');
+      cell.textContent = val.toString(16).padStart(2,'0').toUpperCase();
+      cell.dataset.idx = idx;
+      cell.onclick = () => openEdit(idx);
+      grid.appendChild(cell);
+      ascii += (val >= 32 && val < 127) ? String.fromCharCode(val) : '·';
+    }
+
+    const spacer = document.createElement('div');
+    spacer.className = 'hex-spacer';
+    grid.appendChild(spacer);
+
+    const asciiDiv = document.createElement('div');
+    asciiDiv.className = 'ascii-cell' + (ascii.replace(/·/g,'').length > 0 ? ' nonzero' : '');
+    asciiDiv.textContent = ascii;
+    grid.appendChild(asciiDiv);
+  }
+
+  document.getElementById('hexInfo').textContent = `256 bytes / ${usedCount} non-zero`;
+}
+
+function flashCell(idx) {
+  setTimeout(() => {
+    const cells = document.querySelectorAll('.hex-cell');
+    cells.forEach(c => {
+      if (parseInt(c.dataset.idx) === idx) {
+        c.classList.add('recently-written');
+        setTimeout(() => c.classList.remove('recently-written'), 1100);
+      }
+    });
+  }, 50);
+}
+
+function openEdit(idx) {
+  editingCell = idx;
+  document.getElementById('editAddrLabel').textContent = `Address: 0x${idx.toString(16).padStart(4,'0').toUpperCase()}  Current: 0x${memory[idx].toString(16).padStart(2,'0').toUpperCase()}`;
+  const inp = document.getElementById('editInput');
+  inp.value = memory[idx].toString(16).padStart(2,'0').toUpperCase();
+  document.getElementById('editOverlay').classList.add('open');
+  setTimeout(() => inp.focus(), 50);
+}
+
+function confirmEdit() {
+  if (editingCell < 0) return;
+  const val = parseInt(document.getElementById('editInput').value || '0', 16);
+  memory[editingCell] = val & 0xFF;
+  addLog('write', 'DIRECT', editingCell, val, `MEM[0x${editingCell.toString(16).padStart(4,'0').toUpperCase()}] ← 0x${val.toString(16).padStart(2,'0').toUpperCase()}`);
+  flashCell(editingCell);
+  closeEdit();
+  renderHex();
+}
+
+function closeEdit() {
+  document.getElementById('editOverlay').classList.remove('open');
+  editingCell = -1;
+}
+
+document.getElementById('editOverlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeEdit();
+});
+
+document.getElementById('editInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmEdit();
+  if (e.key === 'Escape') closeEdit();
+});
+
+function fillZero() {
+  memory.fill(0);
+  addLog('ctrl', 'FILL', null, 0x00, 'Memory cleared');
+  renderHex();
+}
+
+function fillRandom() {
+  for (let i = 0; i < MEM_SIZE; i++) memory[i] = Math.floor(Math.random() * 256);
+  addLog('ctrl', 'FILL', null, null, 'Memory randomized');
+  renderHex();
+}
+
+function searchHex(val) {
+  searchHighlights.clear();
+  if (!val) { renderHex(); return; }
+  const needle = parseInt(val.trim(), 16);
+  if (isNaN(needle)) { renderHex(); return; }
+  for (let i = 0; i < MEM_SIZE; i++) {
+    if (memory[i] === (needle & 0xFF)) searchHighlights.add(i);
+  }
+  renderHex();
+}
+
+function clearSearch() {
+  document.getElementById('hexSearch').value = '';
+  searchHighlights.clear();
+  renderHex();
+}
+
+// ─── RESIZE ──────────────────────────────────────────────────────────────────
+const resizeObserver = new ResizeObserver(() => {
+  renderWaveform(null);
+});
+resizeObserver.observe(document.getElementById('waveCanvas'));
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+// Pre-load demo data so MISO bump is immediately visible on first READ
+memory[0x0005] = 0xC8;
+memory[0x0010] = 0x48; memory[0x0011] = 0x65; memory[0x0012] = 0x6C;
+memory[0x0013] = 0x6C; memory[0x0014] = 0x6F; // spells "Hello" in ASCII
+
+selectCmd('WREN', document.querySelector('.cmd-btn[data-cmd="WREN"]'));
+document.getElementById('addrInput').value = '0005';
+document.getElementById('dataInput').value = 'C8';
+renderSR();
+renderHex();
+renderWaveform(null);
+
+// Welcome log entries
+addLog('ctrl', 'BOOT', null, null, '25LC256 EEPROM simulator ready');
+addLog('ctrl', 'INFO', null, null, '0xC8 pre-loaded at 0x0005 — try READ!');
+addLog('ctrl', 'INFO', null, null, '"Hello" pre-loaded at 0x0010–0x0014');
+</script>
+</body>
+</html>
